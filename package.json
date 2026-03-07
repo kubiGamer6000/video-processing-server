@@ -5,9 +5,9 @@
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/server.js",
-    "dev": "tsx --watch src/server.ts",
-    "backfill": "tsx src/scripts/backfill.ts"
+    "start": "node --env-file=.env dist/server.js",
+    "dev": "tsx --env-file=.env --watch src/server.ts",
+    "backfill": "tsx --env-file=.env src/scripts/backfill.ts"
   },
   "keywords": [],
   "author": "",
