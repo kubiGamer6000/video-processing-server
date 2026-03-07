@@ -1,0 +1,9 @@
+node_modules/
+dist/
+
+.env
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!ecosystem.config.js
