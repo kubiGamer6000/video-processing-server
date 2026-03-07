@@ -1,11 +1,11 @@
 import { initializeApp, cert, type App } from "firebase-admin/app";
-import { getStorage, type Bucket } from "firebase-admin/storage";
-import { getFirestore, FieldValue, type Firestore } from "firebase-admin/firestore";
+import { getStorage } from "firebase-admin/storage";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getEnv } from "../config/env.js";
 
 let app: App;
-let bucket: Bucket;
-let db: Firestore;
+let bucket: ReturnType<ReturnType<typeof getStorage>["bucket"]>;
+let db: ReturnType<typeof getFirestore>;
 
 export function initFirebase(): void {
   const env = getEnv();
