@@ -17,23 +17,34 @@ export async function processSegment(job: CropJobMessage): Promise<void> {
     endSeconds,
   });
 
-  try {
-    const [clipDownloadUrl, cfResult] = await Promise.all([
-      uploadClip(clipPath, segmentId),
-      uploadToCloudflareStream(clipPath, segmentId),
-    ]);
+  const [storageResult, cfResult] = await Promise.allSettled([
+    uploadClip(clipPath, segmentId),
+    uploadToCloudflareStream(clipPath, segmentId),
+  ]);
 
-    await updateSegmentDoc(segmentId, {
-      clipStoragePath: `clips/${segmentId}.mp4`,
-      clipDownloadUrl,
-      clipCloudflareUid: cfResult.uid,
-      clipStatus: "ready",
-    });
-
-    console.log(`Segment ${segmentId} processed successfully`);
-  } finally {
-    if (fs.existsSync(clipPath)) {
-      fs.unlinkSync(clipPath);
-    }
+  if (fs.existsSync(clipPath)) {
+    fs.unlinkSync(clipPath);
   }
+
+  if (storageResult.status === "rejected") {
+    const reason = storageResult.reason instanceof Error
+      ? storageResult.reason.message
+      : JSON.stringify(storageResult.reason);
+    throw new Error(`Firebase Storage upload failed: ${reason}`);
+  }
+  if (cfResult.status === "rejected") {
+    const reason = cfResult.reason instanceof Error
+      ? cfResult.reason.message
+      : JSON.stringify(cfResult.reason);
+    throw new Error(`Cloudflare Stream upload failed: ${reason}`);
+  }
+
+  await updateSegmentDoc(segmentId, {
+    clipStoragePath: `clips/${segmentId}.mp4`,
+    clipDownloadUrl: storageResult.value,
+    clipCloudflareUid: cfResult.value.uid,
+    clipStatus: "processing",
+  });
+
+  console.log(`Segment ${segmentId} processed successfully`);
 }

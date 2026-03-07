@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { initializeApp, cert, type App } from "firebase-admin/app";
 import { getStorage } from "firebase-admin/storage";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
@@ -27,7 +28,22 @@ export function getDb() {
 
 export async function downloadVideo(storagePath: string, destPath: string): Promise<void> {
   const file = bucket.file(storagePath);
-  await file.download({ destination: destPath });
+  return new Promise<void>((resolve, reject) => {
+    const writeStream = fs.createWriteStream(destPath);
+    file
+      .createReadStream()
+      .on("error", (err) => {
+        writeStream.destroy();
+        fs.unlink(destPath, () => {});
+        reject(err);
+      })
+      .pipe(writeStream)
+      .on("finish", resolve)
+      .on("error", (err) => {
+        fs.unlink(destPath, () => {});
+        reject(err);
+      });
+  });
 }
 
 export async function uploadClip(localPath: string, segmentId: string): Promise<string> {
@@ -46,7 +62,7 @@ export interface ClipUpdateData {
   clipStoragePath: string;
   clipDownloadUrl: string;
   clipCloudflareUid: string;
-  clipStatus: "ready" | "error";
+  clipStatus: "processing" | "ready" | "clip_failed";
 }
 
 export async function updateSegmentDoc(

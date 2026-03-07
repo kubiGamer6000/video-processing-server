@@ -26,18 +26,24 @@ export interface CropOptions {
   endSeconds: number;
 }
 
+const PADDING_SECONDS = 2;
+
 /**
  * Crops a segment from a video using FFmpeg stream copy (no re-encode).
  * Places -ss before -i for fast seeking, uses -t for duration.
+ * Adds 2s padding before and after the segment for clean cuts.
  * Returns the path to the output clip.
  */
 export async function cropSegment(opts: CropOptions): Promise<string> {
   const outputDir = ensureOutputDir();
   const outputPath = path.join(outputDir, `${opts.segmentId}.mp4`);
-  const duration = opts.endSeconds - opts.startSeconds;
+
+  const paddedStart = Math.max(0, opts.startSeconds - PADDING_SECONDS);
+  const paddedEnd = opts.endSeconds + PADDING_SECONDS;
+  const duration = paddedEnd - paddedStart;
 
   const args = [
-    "-ss", formatSeconds(opts.startSeconds),
+    "-ss", formatSeconds(paddedStart),
     "-i", opts.inputPath,
     "-t", String(duration),
     "-c", "copy",
@@ -45,7 +51,7 @@ export async function cropSegment(opts: CropOptions): Promise<string> {
     outputPath,
   ];
 
-  console.log(`FFmpeg crop: ${opts.segmentId} [${opts.startSeconds}s–${opts.endSeconds}s]`);
+  console.log(`FFmpeg crop: ${opts.segmentId} [${paddedStart}s–${paddedEnd}s] (original ${opts.startSeconds}s–${opts.endSeconds}s, ±${PADDING_SECONDS}s pad)`);
 
   try {
     await execFileAsync("ffmpeg", args, { timeout: 120_000 });

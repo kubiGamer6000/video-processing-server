@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "dev": "tsx --watch src/server.ts",
-    "backfill": "tsx src/scripts/backfill.ts"
+    "backfill": "tsx src/scripts/backfill.ts",
+    "backfill:local": "tsx src/scripts/backfill-local.ts"
   },
   "keywords": [],
   "author": "",
@@ -18,6 +19,7 @@
     "dotenv": "^16.5.0",
     "express": "^5.2.1",
     "firebase-admin": "^13.6.0",
+    "tus-js-client": "^4.3.1",
     "zod": "^3.25.67"
   },
   "devDependencies": {
