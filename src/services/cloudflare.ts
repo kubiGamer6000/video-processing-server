@@ -9,9 +9,26 @@ export interface StreamUploadResult {
   uid: string;
 }
 
+async function disableSignedUrls(uid: string): Promise<void> {
+  const env = getEnv();
+  const res = await fetch(`${CF_API_BASE}/${env.CF_ACCOUNT_ID}/stream/${uid}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.CF_API_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ requireSignedURLs: false }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    console.warn(`Failed to disable signed URLs for ${uid}: ${res.status} ${body}`);
+  }
+}
+
 /**
  * Uploads a local video file to Cloudflare Stream using the tus (resumable) protocol.
- * Handles large clips reliably by uploading in 50 MB chunks with automatic retry.
+ * After upload, explicitly disables requireSignedURLs via the REST API.
  */
 export function uploadToCloudflareStream(
   localPath: string,
@@ -33,7 +50,6 @@ export function uploadToCloudflareStream(
       retryDelays: [1000, 3000, 5000, 10000],
       metadata: {
         name: `clip-${segmentId}.mp4`,
-        requiresignedurls: "false",
         segmentId,
       },
       onError(err) {
@@ -51,7 +67,6 @@ export function uploadToCloudflareStream(
           );
           return;
         }
-        // URL format: https://api.cloudflare.com/.../stream/{uid}?tusv2=true
         const urlPath = new URL(uploadUrl).pathname;
         const uid = urlPath.split("/").pop();
         if (!uid) {
@@ -61,7 +76,10 @@ export function uploadToCloudflareStream(
           return;
         }
         console.log(`Cloudflare Stream upload complete: ${segmentId} → ${uid}`);
-        resolve({ uid });
+
+        disableSignedUrls(uid)
+          .then(() => resolve({ uid }))
+          .catch(() => resolve({ uid }));
       },
       onProgress(bytesUploaded, bytesTotal) {
         const pct = ((bytesUploaded / bytesTotal) * 100).toFixed(1);
