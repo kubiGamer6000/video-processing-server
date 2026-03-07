@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { getEnv } from "./config/env.js";
 import { initFirebase } from "./services/firebase.js";
 import { startSubscriber, stopSubscriber } from "./services/pubsub.js";

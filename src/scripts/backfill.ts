@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { getEnv } from "../config/env.js";
 import { initFirebase, getDb } from "../services/firebase.js";
 import { processSegment } from "../worker/segment-processor.js";
