@@ -19,7 +19,7 @@ async function backfill(): Promise<void> {
   // Firestore can't query for "field does not exist", so fetch all and filter
   const allSegments = await db.collection("segments").get();
   const unprocessed = allSegments.docs.filter(
-    (doc) => !doc.data().clipStatus,
+    (doc: FirebaseFirestore.QueryDocumentSnapshot) => !doc.data().clipStatus,
   );
 
   console.log(`Found ${unprocessed.length} segments to process`);

@@ -9,6 +9,7 @@ const envSchema = z.object({
   CF_API_TOKEN: z.string().min(1),
   VIDEO_CACHE_DIR: z.string().default("/tmp/video-cache"),
   CLIP_OUTPUT_DIR: z.string().default("/tmp/clips"),
+  DEPLOY_SECRET: z.string().default(""),
   PORT: z.coerce.number().default(3000),
 });
 

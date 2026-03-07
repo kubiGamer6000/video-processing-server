@@ -17,11 +17,11 @@ export function initFirebase(): void {
   db = getFirestore(app);
 }
 
-export function getBucket(): Bucket {
+export function getBucket() {
   return bucket;
 }
 
-export function getDb(): Firestore {
+export function getDb() {
   return db;
 }
 
