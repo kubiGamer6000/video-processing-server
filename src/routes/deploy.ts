@@ -41,7 +41,7 @@ router.post("/deploy", (req, res) => {
   console.log(`[deploy] Push received — ref=${ref}, pusher=${pusher}, commit="${commitMsg}", delivery=${delivery}`);
   res.json({ message: "Deploy started" });
 
-  exec("bash deploy.sh", { cwd: process.cwd() }, (err, stdout, stderr) => {
+  exec("bash deploy.sh", { cwd: process.cwd() }, (err, _stdout, stderr) => {
     if (err) {
       console.error(`[deploy] FAILED (delivery: ${delivery}):`, stderr);
       return;
