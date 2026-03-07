@@ -1,16 +1,24 @@
 #!/bin/bash
 set -e
 
-echo "Pulling latest code..."
-git pull origin main
+LOG_FILE="/var/log/segment-worker-deploy.log"
 
-echo "Installing dependencies..."
-npm install
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
 
-echo "Building..."
-npm run build
+log "=== Deploy started ==="
 
-echo "Restarting worker..."
-pm2 restart segment-worker
+log "Pulling latest code..."
+git pull origin main 2>&1 | tee -a "$LOG_FILE"
 
-echo "Deploy complete."
+log "Installing dependencies..."
+npm install 2>&1 | tee -a "$LOG_FILE"
+
+log "Building..."
+npm run build 2>&1 | tee -a "$LOG_FILE"
+
+log "Restarting worker..."
+pm2 restart segment-worker 2>&1 | tee -a "$LOG_FILE"
+
+log "=== Deploy complete ==="

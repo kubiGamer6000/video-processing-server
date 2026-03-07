@@ -33,7 +33,7 @@ export function uploadToCloudflareStream(
       retryDelays: [1000, 3000, 5000, 10000],
       metadata: {
         name: `clip-${segmentId}.mp4`,
-        requireSignedURLs: "false",
+        requiresignedurls: "false",
         segmentId,
       },
       onError(err) {
