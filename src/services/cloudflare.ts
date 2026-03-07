@@ -33,23 +33,31 @@ export function uploadToCloudflareStream(
       retryDelays: [1000, 3000, 5000, 10000],
       metadata: {
         name: `clip-${segmentId}.mp4`,
-        requiresignedurls: "false",
+        requireSignedURLs: "false",
         segmentId,
       },
       onError(err) {
-        reject(new Error(`Cloudflare tus upload failed for ${segmentId}: ${err.message}`));
+        reject(
+          new Error(
+            `Cloudflare tus upload failed for ${segmentId}: ${err.message}`,
+          ),
+        );
       },
       onSuccess() {
         const uploadUrl = upload.url;
         if (!uploadUrl) {
-          reject(new Error(`Cloudflare tus upload returned no URL for ${segmentId}`));
+          reject(
+            new Error(`Cloudflare tus upload returned no URL for ${segmentId}`),
+          );
           return;
         }
         // URL format: https://api.cloudflare.com/.../stream/{uid}?tusv2=true
         const urlPath = new URL(uploadUrl).pathname;
         const uid = urlPath.split("/").pop();
         if (!uid) {
-          reject(new Error(`Could not parse UID from upload URL: ${uploadUrl}`));
+          reject(
+            new Error(`Could not parse UID from upload URL: ${uploadUrl}`),
+          );
           return;
         }
         console.log(`Cloudflare Stream upload complete: ${segmentId} → ${uid}`);
@@ -57,7 +65,9 @@ export function uploadToCloudflareStream(
       },
       onProgress(bytesUploaded, bytesTotal) {
         const pct = ((bytesUploaded / bytesTotal) * 100).toFixed(1);
-        console.log(`  CF upload ${segmentId}: ${pct}% (${(bytesUploaded / 1024 / 1024).toFixed(1)} MB / ${(bytesTotal / 1024 / 1024).toFixed(1)} MB)`);
+        console.log(
+          `  CF upload ${segmentId}: ${pct}% (${(bytesUploaded / 1024 / 1024).toFixed(1)} MB / ${(bytesTotal / 1024 / 1024).toFixed(1)} MB)`,
+        );
       },
     });
 

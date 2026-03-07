@@ -8,7 +8,8 @@
     "start": "node dist/server.js",
     "dev": "tsx --watch src/server.ts",
     "backfill": "tsx src/scripts/backfill.ts",
-    "backfill:local": "tsx src/scripts/backfill-local.ts"
+    "backfill:local": "tsx src/scripts/backfill-local.ts",
+    "fix:signed-urls": "tsx src/scripts/fix-signed-urls.ts"
   },
   "keywords": [],
   "author": "",

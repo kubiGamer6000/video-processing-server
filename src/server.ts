@@ -2,11 +2,13 @@ import "dotenv/config";
 import { getEnv } from "./config/env.js";
 import { initFirebase } from "./services/firebase.js";
 import { startSubscriber, stopSubscriber } from "./services/pubsub.js";
+import { logCacheStats } from "./services/video-cache.js";
 import app from "./app.js";
 
 const env = getEnv();
 
 initFirebase();
+logCacheStats();
 startSubscriber();
 
 const server = app.listen(env.PORT, () => {

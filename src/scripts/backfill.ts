@@ -2,7 +2,7 @@ import "dotenv/config";
 import { getEnv } from "../config/env.js";
 import { initFirebase, getDb } from "../services/firebase.js";
 import { processSegment } from "../worker/segment-processor.js";
-import { cleanupOldCache } from "../services/video-cache.js";
+import { clearCache } from "../services/video-cache.js";
 
 interface SegmentDoc {
   videoStoragePath?: string;
@@ -63,7 +63,7 @@ async function backfill(): Promise<void> {
     }
   }
 
-  cleanupOldCache(0);
+  clearCache();
 
   console.log(`\nBackfill complete: ${processed} processed, ${failed} failed`);
   process.exit(failed > 0 ? 1 : 0);
