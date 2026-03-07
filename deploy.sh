@@ -10,7 +10,7 @@ log() {
 log "=== Deploy started ==="
 
 log "Pulling latest code..."
-git pull origin main 2>&1 | tee -a "$LOG_FILE"
+git pull 2>&1 | tee -a "$LOG_FILE"
 
 log "Installing dependencies..."
 npm install 2>&1 | tee -a "$LOG_FILE"
