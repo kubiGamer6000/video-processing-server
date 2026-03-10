@@ -16,6 +16,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@elevenlabs/elevenlabs-js": "^2.38.1",
     "@google-cloud/pubsub": "^5.3.0",
     "dotenv": "^16.5.0",
     "express": "^5.2.1",

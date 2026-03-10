@@ -10,6 +10,8 @@ const envSchema = z.object({
   VIDEO_CACHE_DIR: z.string().default("/mnt/video-cache"),
   VIDEO_CACHE_MAX_GB: z.coerce.number().default(80),
   CLIP_OUTPUT_DIR: z.string().default("/tmp/clips"),
+  VPS_API_KEY: z.string().min(1),
+  ELEVENLABS_API_KEY: z.string().min(1),
   DEPLOY_SECRET: z.string().default(""),
   PORT: z.coerce.number().default(3000),
 });

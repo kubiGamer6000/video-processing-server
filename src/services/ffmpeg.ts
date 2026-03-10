@@ -26,6 +26,13 @@ export interface CropOptions {
   endSeconds: number;
 }
 
+export interface ExtractAudioOptions {
+  inputPath: string;
+  startSeconds: number;
+  endSeconds: number;
+  outputPath: string;
+}
+
 const PADDING_SECONDS = 2;
 
 /**
@@ -61,4 +68,34 @@ export async function cropSegment(opts: CropOptions): Promise<string> {
   }
 
   return outputPath;
+}
+
+/**
+ * Extracts audio from a video for a given time range as MP3.
+ * Uses -ss before -i for fast seeking. Audio-only, no video re-encoding.
+ */
+export async function extractAudio(opts: ExtractAudioOptions): Promise<string> {
+  const duration = opts.endSeconds - opts.startSeconds;
+
+  const args = [
+    "-ss", formatSeconds(opts.startSeconds),
+    "-i", opts.inputPath,
+    "-t", String(duration),
+    "-vn",
+    "-acodec", "libmp3lame",
+    "-q:a", "4",
+    "-y",
+    opts.outputPath,
+  ];
+
+  console.log(`FFmpeg audio extract: [${opts.startSeconds}s–${opts.endSeconds}s] → ${opts.outputPath}`);
+
+  try {
+    await execFileAsync("ffmpeg", args, { timeout: 120_000 });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`FFmpeg audio extraction failed: ${msg}`);
+  }
+
+  return opts.outputPath;
 }
