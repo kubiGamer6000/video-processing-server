@@ -4,8 +4,8 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { requireApiKey } from "../middlewares/api-key-auth.js";
 import { getCachedVideo } from "../services/video-cache.js";
-import { extractAudio } from "../services/ffmpeg.js";
-import { transcribeAudio } from "../services/elevenlabs.js";
+import { extractAudio, extractFullAudio } from "../services/ffmpeg.js";
+import { transcribeAudio, transcribeAudioFull } from "../services/elevenlabs.js";
 import { getEnv } from "../config/env.js";
 
 const router = Router();
@@ -50,6 +50,40 @@ router.post("/transcribe", requireApiKey, async (req: Request, res: Response) =>
   } finally {
     if (fs.existsSync(mp3Path)) {
       fs.unlinkSync(mp3Path);
+    }
+  }
+});
+
+router.post("/transcribe-full", requireApiKey, async (req: Request, res: Response) => {
+  const { videoStoragePath, diarize } = req.body;
+
+  if (!videoStoragePath) {
+    res.status(400).json({ error: "videoStoragePath is required" });
+    return;
+  }
+
+  const tempId = crypto.randomUUID();
+  const outputDir = getEnv().CLIP_OUTPUT_DIR;
+  fs.mkdirSync(outputDir, { recursive: true });
+  const oggPath = path.join(outputDir, `transcribe-full-${tempId}.ogg`);
+
+  try {
+    console.log(`[transcribe-full] Starting: ${videoStoragePath} (diarize=${!!diarize})`);
+
+    const videoPath = await getCachedVideo(videoStoragePath);
+
+    await extractFullAudio({ inputPath: videoPath, outputPath: oggPath });
+
+    const result = await transcribeAudioFull(oggPath, !!diarize);
+
+    res.json(result);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[transcribe-full] Failed:`, msg);
+    res.status(500).json({ error: msg });
+  } finally {
+    if (fs.existsSync(oggPath)) {
+      fs.unlinkSync(oggPath);
     }
   }
 });

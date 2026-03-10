@@ -99,3 +99,37 @@ export async function extractAudio(opts: ExtractAudioOptions): Promise<string> {
 
   return opts.outputPath;
 }
+
+export interface ExtractFullAudioOptions {
+  inputPath: string;
+  outputPath: string;
+}
+
+/**
+ * Extracts the full audio track from a video as compressed OGG (Opus).
+ * Optimised for speech-to-text: 16 kHz mono, 32 kbps VoIP preset.
+ */
+export async function extractFullAudio(opts: ExtractFullAudioOptions): Promise<string> {
+  const args = [
+    "-i", opts.inputPath,
+    "-vn",
+    "-ar", "16000",
+    "-ac", "1",
+    "-c:a", "libopus",
+    "-b:a", "32k",
+    "-application", "voip",
+    "-y",
+    opts.outputPath,
+  ];
+
+  console.log(`FFmpeg full audio extract: ${opts.inputPath} → ${opts.outputPath}`);
+
+  try {
+    await execFileAsync("ffmpeg", args, { timeout: 600_000 });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`FFmpeg full audio extraction failed: ${msg}`);
+  }
+
+  return opts.outputPath;
+}
