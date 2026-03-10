@@ -70,13 +70,15 @@ export async function transcribeAudioFull(
     diarize,
   });
 
-  const words: TranscriptionWord[] = (result.words ?? []).map((w) => ({
-    text: w.text,
-    start: w.start,
-    end: w.end,
-    type: w.type,
-    speaker_id: (w as Record<string, unknown>).speaker_id as string | undefined,
-  }));
+  const words: TranscriptionWord[] = (result.words ?? [])
+    .filter((w) => w.start != null && w.end != null)
+    .map((w) => ({
+      text: w.text,
+      start: w.start!,
+      end: w.end!,
+      type: w.type,
+      speaker_id: (w as unknown as Record<string, unknown>).speaker_id as string | undefined,
+    }));
 
   console.log(
     `ElevenLabs transcribe-full complete: ${result.text.length} chars, ${words.length} words`,
@@ -85,6 +87,6 @@ export async function transcribeAudioFull(
   return {
     text: result.text,
     words,
-    languageCode: (result as Record<string, unknown>).language_code as string ?? "eng",
+    languageCode: (result as unknown as Record<string, unknown>).language_code as string ?? "eng",
   };
 }
