@@ -6,9 +6,33 @@ import { requireApiKey } from "../middlewares/api-key-auth.js";
 import { getCachedVideo } from "../services/video-cache.js";
 import { extractAudio, extractFullAudio } from "../services/ffmpeg.js";
 import { transcribeAudio, transcribeAudioFull } from "../services/elevenlabs.js";
+import { getSignedSourceUrl } from "../services/firebase.js";
 import { getEnv } from "../config/env.js";
 
 const router = Router();
+
+/**
+ * Run an FFmpeg-based extractor first via HTTP streaming from a signed URL,
+ * then — only if that fails (typically non-faststart MP4s) — fall back to
+ * downloading the full source into the LRU cache.
+ */
+async function withStreamingFallback<T>(
+  videoStoragePath: string,
+  logTag: string,
+  run: (input: string) => Promise<T>,
+): Promise<T> {
+  try {
+    const signedUrl = await getSignedSourceUrl(videoStoragePath);
+    return await run(signedUrl);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[${logTag}] streaming failed (${msg}), falling back to full download`,
+    );
+  }
+  const localPath = await getCachedVideo(videoStoragePath);
+  return run(localPath);
+}
 
 router.post("/transcribe", requireApiKey, async (req: Request, res: Response) => {
   const { videoStoragePath, startSeconds, endSeconds } = req.body;
@@ -31,14 +55,9 @@ router.post("/transcribe", requireApiKey, async (req: Request, res: Response) =>
   try {
     console.log(`[transcribe] Starting: ${videoStoragePath} [${startSeconds}s–${endSeconds}s]`);
 
-    const videoPath = await getCachedVideo(videoStoragePath);
-
-    await extractAudio({
-      inputPath: videoPath,
-      startSeconds,
-      endSeconds,
-      outputPath: mp3Path,
-    });
+    await withStreamingFallback(videoStoragePath, "transcribe", (input) =>
+      extractAudio({ input, startSeconds, endSeconds, outputPath: mp3Path }),
+    );
 
     const text = await transcribeAudio(mp3Path);
 
@@ -70,9 +89,9 @@ router.post("/transcribe-full", requireApiKey, async (req: Request, res: Respons
   try {
     console.log(`[transcribe-full] Starting: ${videoStoragePath} (diarize=${!!diarize})`);
 
-    const videoPath = await getCachedVideo(videoStoragePath);
-
-    await extractFullAudio({ inputPath: videoPath, outputPath: oggPath });
+    await withStreamingFallback(videoStoragePath, "transcribe-full", (input) =>
+      extractFullAudio({ input, outputPath: oggPath }),
+    );
 
     const result = await transcribeAudioFull(oggPath, !!diarize);
 

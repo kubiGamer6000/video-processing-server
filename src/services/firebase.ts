@@ -26,6 +26,20 @@ export function getDb() {
   return db;
 }
 
+/**
+ * Generates a short-lived (1h) read signed URL for a source video in Firebase
+ * Storage. Used to let FFmpeg stream-read from the file over HTTPS (with HTTP
+ * range requests) instead of downloading the whole file to disk.
+ */
+export async function getSignedSourceUrl(storagePath: string): Promise<string> {
+  const file = bucket.file(storagePath);
+  const [url] = await file.getSignedUrl({
+    action: "read",
+    expires: Date.now() + 60 * 60 * 1000,
+  });
+  return url;
+}
+
 export async function downloadVideo(storagePath: string, destPath: string): Promise<void> {
   const file = bucket.file(storagePath);
   return new Promise<void>((resolve, reject) => {

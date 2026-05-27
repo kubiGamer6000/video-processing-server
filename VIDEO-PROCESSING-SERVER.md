@@ -6,14 +6,15 @@ An Express/TypeScript server that runs on a DigitalOcean Droplet and processes v
 
 For each segment, the server:
 
-1. Downloads (or locates) the source video
+1. Generates a short-lived signed URL for the source video and asks FFmpeg to read directly from it over HTTPS (HTTP range requests pull only the bytes for the segment + lookahead instead of the whole file). Falls back to downloading the whole source into the LRU disk cache only when streaming fails — typically MP4s where the `moov` atom isn't at the start of the file.
 2. Crops the segment using FFmpeg stream copy (no re-encoding, 2–5 seconds per clip)
-3. Uploads the clip to both Firebase Storage and Cloudflare Stream
+3. Uploads the clip to both Firebase Storage and Cloudflare Stream in parallel
 4. Updates the Firestore segment document with clip URLs and status
 
 - **Runtime:** Node.js, TypeScript, Express
 - **Deployment:** DigitalOcean Droplet via PM2
 - **FFmpeg mode:** Stream copy (`-c copy`) with 2s padding before and after
+- **Source access:** HTTP streaming from a Firebase signed URL (primary); local LRU disk cache (fallback)
 
 ---
 
@@ -24,8 +25,12 @@ Google Cloud Pub/Sub (topic: segment-crop-jobs)
         ↓  pull subscription
 VideoProcessingServer (DigitalOcean Droplet)
         ↓
-1. Download source video from Firebase Storage (persistent LRU cache on mounted volume)
-2. FFmpeg stream copy: -ss {start-2s} -i input -t {duration+4s} -c copy
+1. Generate a 1-hour signed read URL for the source video in Firebase Storage
+2. FFmpeg stream copy from URL (HTTP range requests):
+     -reconnect 1 -seekable 1 -ss {start-2s} -i {signedUrl} -t {duration+4s} -c copy
+   ↳ Fallback: if FFmpeg can't range-seek the source (e.g. non-faststart MP4
+     where the moov atom is at the end), download the whole file into the
+     LRU cache on the mounted volume and crop from local disk instead.
 3. Upload clip to Firebase Storage (clips/{segmentId}.mp4)
 4. Upload clip to Cloudflare Stream (tus resumable protocol)
 5. Update Firestore segment: clipStatus "processing", clipCloudflareUid, clipDownloadUrl
@@ -94,7 +99,7 @@ Validates all env vars at startup using Zod. Exits with a clear error if any are
 ### `services/pubsub.ts` — Pub/Sub Subscriber
 
 - Connects to the `segment-crop-worker` pull subscription using the service account key
-- Flow control: `maxMessages: 2` (processes up to 2 segments concurrently)
+- Flow control: `maxMessages: 8` (processes up to 8 segments concurrently). Since crops now stream from a signed URL instead of thrashing the disk, network + small bursts of CPU are the bottleneck, not disk I/O
 - On message: parses JSON payload, calls `processSegment()`, then `message.ack()` on success or `message.nack()` on failure
 - Pub/Sub automatically retries `nack`ed messages with backoff
 - The 600s ack deadline prevents Pub/Sub from re-delivering while FFmpeg + upload is still running
@@ -158,7 +163,7 @@ Source videos (6GB+) are expensive to download. The cache ensures each video is 
 
 Processes a single segment end-to-end:
 
-1. Download source video via cache (skip if already local)
+1. Try to crop directly from a Firebase signed URL (no download). If FFmpeg fails (typically because the source's index is at the end of the file and can't be range-seeked), fall back to downloading the full source into the LRU disk cache and crop locally.
 2. Crop with FFmpeg (stream copy, ±2s padding)
 3. Upload clip to Firebase Storage and Cloudflare Stream **in parallel** (`Promise.allSettled` — both uploads run to completion before cleanup)
 4. Delete the temporary clip file

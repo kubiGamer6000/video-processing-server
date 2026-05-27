@@ -39,7 +39,7 @@ async function processLocalSegment(
   endSeconds: number,
 ): Promise<void> {
   const clipPath = await cropSegment({
-    inputPath: localVideoPath,
+    input: localVideoPath,
     segmentId,
     startSeconds,
     endSeconds,

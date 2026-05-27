@@ -42,7 +42,10 @@ export function startSubscriber(): void {
 
   subscription = pubsub.subscription(env.PUBSUB_SUBSCRIPTION, {
     flowControl: {
-      maxMessages: 2,
+      // With HTTP-streaming crops the bottleneck shifts from disk I/O to
+      // network + small bursts of CPU, so we can comfortably run a lot more
+      // jobs in parallel than the old disk-thrash-bound limit of 2.
+      maxMessages: 8,
     },
   });
 
