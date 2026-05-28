@@ -1,9 +1,28 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { CropJobMessage } from "../services/pubsub.js";
 import { getCachedVideo } from "../services/video-cache.js";
 import { cropSegment } from "../services/ffmpeg.js";
 import { uploadClip, updateSegmentDoc, getSignedSourceUrl } from "../services/firebase.js";
 import { uploadToCloudflareStream } from "../services/cloudflare.js";
+
+/**
+ * iPhone-recorded `.mov` files have the `moov` atom written at the END of
+ * the file (not faststart). Reading them via HTTP forces ffmpeg to scan
+ * for moov by issuing many small range requests, which on droplet-class
+ * bandwidth means many minutes of "appears frozen". Skip streaming for
+ * these and use the local LRU disk cache instead — that's a single big
+ * GET which the droplet handles fine.
+ *
+ * Faststart .mp4 (everything else we get) streams fine via HTTP range
+ * reads and saves the full-file download entirely.
+ */
+function shouldStreamSource(videoStoragePath: string): boolean {
+  const ext = path.extname(videoStoragePath).toLowerCase();
+  // Anything .mov: assume non-faststart, skip streaming.
+  if (ext === ".mov") return false;
+  return true;
+}
 
 async function cropWithFallback(
   segmentId: string,
@@ -11,18 +30,25 @@ async function cropWithFallback(
   startSeconds: number,
   endSeconds: number,
 ): Promise<string> {
-  try {
-    const signedUrl = await getSignedSourceUrl(videoStoragePath);
-    return await cropSegment({
-      input: signedUrl,
-      segmentId,
-      startSeconds,
-      endSeconds,
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
-      `[segment ${segmentId}] streaming crop failed (${msg}), falling back to full download`,
+  if (shouldStreamSource(videoStoragePath)) {
+    try {
+      const signedUrl = await getSignedSourceUrl(videoStoragePath);
+      return await cropSegment({
+        input: signedUrl,
+        segmentId,
+        startSeconds,
+        endSeconds,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[segment ${segmentId}] streaming crop failed (${msg}), falling back to full download`,
+      );
+    }
+  } else {
+    console.log(
+      `[segment ${segmentId}] skipping HTTP streaming for ${path.extname(videoStoragePath)} ` +
+        `(likely non-faststart) — using cached download path`,
     );
   }
 

@@ -1,10 +1,111 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { getEnv } from "../config/env.js";
 
-const execFileAsync = promisify(execFile);
+/**
+ * Run ffmpeg with LIVE stderr streaming + stall detection.
+ *
+ * Why this exists: execFile's buffered behaviour hides ffmpeg progress until
+ * the process exits. When the input is a non-faststart iPhone .mov over
+ * HTTP, ffmpeg sits there scanning the file for the moov atom for minutes
+ * with zero pm2-visible output. Result: looks frozen, debugging impossible,
+ * and we can't decide to give up early.
+ *
+ * With spawn + stderr piped, we:
+ *   - print every ffmpeg stderr line as it arrives → pm2 logs show progress
+ *   - watch the gap between lines → if ffmpeg hasn't said anything in
+ *     `stallMs`, assume it's hung on a stuck HTTP read and SIGKILL it
+ *   - apply a hard ceiling timeout (totalMs) so a slow-but-progressing
+ *     stream still can't drag on forever
+ *
+ * Returns a Promise that resolves on exit code 0 and rejects with the last
+ * 30 stderr lines on any failure (timeout, stall, non-zero exit).
+ */
+interface SpawnOpts {
+  args: string[];
+  /** Tag printed before each stderr line (e.g. segment id) */
+  logTag: string;
+  /** Kill if no stderr line received within this many ms. Default: 30s. */
+  stallMs?: number;
+  /** Hard wallclock ceiling regardless of activity. Default: 300s. */
+  totalMs?: number;
+}
+
+async function runFfmpeg(opts: SpawnOpts): Promise<void> {
+  const stallMs = opts.stallMs ?? 30_000;
+  const totalMs = opts.totalMs ?? 300_000;
+
+  return new Promise<void>((resolve, reject) => {
+    const t0 = Date.now();
+    const child = spawn("ffmpeg", opts.args, { stdio: ["ignore", "pipe", "pipe"] });
+
+    let stderrBuf = "";
+    let partial = "";
+    let lastLineAt = Date.now();
+
+    const onChunk = (chunk: Buffer) => {
+      const text = chunk.toString();
+      stderrBuf += text;
+      partial += text;
+      const lines = partial.split("\n");
+      partial = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          lastLineAt = Date.now();
+          console.log(`[ffmpeg ${opts.logTag}] ${trimmed}`);
+        }
+      }
+    };
+    child.stderr.on("data", onChunk);
+
+    const stallTimer = setInterval(() => {
+      const idle = Date.now() - lastLineAt;
+      if (idle > stallMs) {
+        clearInterval(stallTimer);
+        console.warn(
+          `[ffmpeg ${opts.logTag}] STALL — no output for ${idle}ms (limit ${stallMs}ms), killing`,
+        );
+        child.kill("SIGKILL");
+      }
+    }, 5000);
+
+    const hardTimeout = setTimeout(() => {
+      console.warn(
+        `[ffmpeg ${opts.logTag}] HARD TIMEOUT — ${totalMs}ms ceiling reached, killing`,
+      );
+      child.kill("SIGKILL");
+    }, totalMs);
+
+    child.on("error", (err) => {
+      clearInterval(stallTimer);
+      clearTimeout(hardTimeout);
+      reject(err);
+    });
+
+    child.on("close", (code, signal) => {
+      clearInterval(stallTimer);
+      clearTimeout(hardTimeout);
+      const wallMs = Date.now() - t0;
+      if (code === 0) {
+        console.log(`[ffmpeg ${opts.logTag}] done in ${wallMs}ms`);
+        resolve();
+        return;
+      }
+      const stderrTail = stderrBuf.split("\n").slice(-30).join("\n");
+      const reason =
+        signal === "SIGKILL"
+          ? `killed (stall or timeout, ${wallMs}ms)`
+          : `exit=${code} (${wallMs}ms)`;
+      reject(
+        new Error(
+          `ffmpeg ${reason}\n--- stderr (last 30 lines) ---\n${stderrTail}`,
+        ),
+      );
+    });
+  });
+}
 
 function ensureOutputDir(): string {
   const dir = getEnv().CLIP_OUTPUT_DIR;
@@ -83,11 +184,14 @@ export async function cropSegment(opts: CropOptions): Promise<string> {
   const usingHttp = isHttpUrl(opts.input);
 
   const args = [
+    "-hide_banner",
+    "-loglevel", "info",
     ...(usingHttp ? httpInputFlags() : []),
     "-ss", formatSeconds(paddedStart),
     "-i", opts.input,
     "-t", String(duration),
     "-c", "copy",
+    "-avoid_negative_ts", "make_zero",
     "-y",
     outputPath,
   ];
@@ -98,22 +202,17 @@ export async function cropSegment(opts: CropOptions): Promise<string> {
       `via ${usingHttp ? "stream (HTTP)" : "local"}`,
   );
 
-  try {
-    const timeout = usingHttp ? 300_000 : 120_000;
-    await execFileAsync("ffmpeg", args, {
-      timeout,
-      maxBuffer: 16 * 1024 * 1024,
-    });
-  } catch (err: unknown) {
-    // execFile's default error message swallows stderr; pull it out so the
-    // logs actually show why FFmpeg failed.
-    const e = err as { message?: string; stderr?: string | Buffer; code?: number };
-    const stderrTail = (e.stderr ? String(e.stderr) : "").split("\n").slice(-20).join("\n");
-    throw new Error(
-      `FFmpeg failed for ${opts.segmentId} (exit=${e.code ?? "?"}): ${e.message ?? "unknown"}\n` +
-        `--- stderr (last 20 lines) ---\n${stderrTail}`,
-    );
-  }
+  // HTTP path: tight stall + hard timeout because we have a local-download
+  // fallback. If ffmpeg can't make progress against this URL within 30s,
+  // the source is almost certainly a non-faststart MOV and we should give
+  // up early and let cropWithFallback() download the file properly.
+  // Local path: longer stall budget (slow disks happen), 5-min ceiling.
+  await runFfmpeg({
+    args,
+    logTag: opts.segmentId,
+    stallMs: usingHttp ? 30_000 : 60_000,
+    totalMs: usingHttp ? 120_000 : 300_000,
+  });
 
   return outputPath;
 }
@@ -127,6 +226,8 @@ export async function extractAudio(opts: ExtractAudioOptions): Promise<string> {
   const usingHttp = isHttpUrl(opts.input);
 
   const args = [
+    "-hide_banner",
+    "-loglevel", "info",
     ...(usingHttp ? httpInputFlags() : []),
     "-ss", formatSeconds(opts.startSeconds),
     "-i", opts.input,
@@ -143,17 +244,12 @@ export async function extractAudio(opts: ExtractAudioOptions): Promise<string> {
       `via ${usingHttp ? "stream (HTTP)" : "local"}`,
   );
 
-  try {
-    const timeout = usingHttp ? 300_000 : 120_000;
-    await execFileAsync("ffmpeg", args, { timeout, maxBuffer: 16 * 1024 * 1024 });
-  } catch (err: unknown) {
-    const e = err as { message?: string; stderr?: string | Buffer; code?: number };
-    const stderrTail = (e.stderr ? String(e.stderr) : "").split("\n").slice(-20).join("\n");
-    throw new Error(
-      `FFmpeg audio extraction failed (exit=${e.code ?? "?"}): ${e.message ?? "unknown"}\n` +
-        `--- stderr (last 20 lines) ---\n${stderrTail}`,
-    );
-  }
+  await runFfmpeg({
+    args,
+    logTag: `audio:${path.basename(opts.outputPath)}`,
+    stallMs: usingHttp ? 30_000 : 60_000,
+    totalMs: usingHttp ? 120_000 : 300_000,
+  });
 
   return opts.outputPath;
 }
@@ -176,6 +272,8 @@ export async function extractFullAudio(opts: ExtractFullAudioOptions): Promise<s
   const usingHttp = isHttpUrl(opts.input);
 
   const args = [
+    "-hide_banner",
+    "-loglevel", "info",
     ...(usingHttp ? httpInputFlags() : []),
     "-i", opts.input,
     "-vn",
@@ -193,16 +291,14 @@ export async function extractFullAudio(opts: ExtractFullAudioOptions): Promise<s
       `via ${usingHttp ? "stream (HTTP)" : "local"}`,
   );
 
-  try {
-    await execFileAsync("ffmpeg", args, { timeout: 900_000, maxBuffer: 16 * 1024 * 1024 });
-  } catch (err: unknown) {
-    const e = err as { message?: string; stderr?: string | Buffer; code?: number };
-    const stderrTail = (e.stderr ? String(e.stderr) : "").split("\n").slice(-20).join("\n");
-    throw new Error(
-      `FFmpeg full audio extraction failed (exit=${e.code ?? "?"}): ${e.message ?? "unknown"}\n` +
-        `--- stderr (last 20 lines) ---\n${stderrTail}`,
-    );
-  }
+  // Full-file read: more permissive stall budget (large files genuinely
+  // take time even while making progress), 15-min ceiling for HTTP cases.
+  await runFfmpeg({
+    args,
+    logTag: `full-audio:${path.basename(opts.outputPath)}`,
+    stallMs: 60_000,
+    totalMs: 900_000,
+  });
 
   return opts.outputPath;
 }

@@ -15,19 +15,33 @@ const router = Router();
  * Run an FFmpeg-based extractor first via HTTP streaming from a signed URL,
  * then — only if that fails (typically non-faststart MP4s) — fall back to
  * downloading the full source into the LRU cache.
+ *
+ * Skips HTTP streaming entirely for `.mov` files: iPhone-recorded .mov has
+ * the moov atom at the END of the file, so ffmpeg has to scan the whole
+ * thing over slow droplet HTTP to find it. The local-cache path does a
+ * single large GET which is dramatically faster.
  */
 async function withStreamingFallback<T>(
   videoStoragePath: string,
   logTag: string,
   run: (input: string) => Promise<T>,
 ): Promise<T> {
-  try {
-    const signedUrl = await getSignedSourceUrl(videoStoragePath);
-    return await run(signedUrl);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
-      `[${logTag}] streaming failed (${msg}), falling back to full download`,
+  const ext = path.extname(videoStoragePath).toLowerCase();
+  const canStream = ext !== ".mov";
+
+  if (canStream) {
+    try {
+      const signedUrl = await getSignedSourceUrl(videoStoragePath);
+      return await run(signedUrl);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[${logTag}] streaming failed (${msg}), falling back to full download`,
+      );
+    }
+  } else {
+    console.log(
+      `[${logTag}] skipping HTTP streaming for ${ext} (likely non-faststart) — using cached download path`,
     );
   }
   const localPath = await getCachedVideo(videoStoragePath);
