@@ -5,19 +5,12 @@ import { cropSegment } from "../services/ffmpeg.js";
 import { uploadClip, updateSegmentDoc, getSignedSourceUrl } from "../services/firebase.js";
 import { uploadToCloudflareStream } from "../services/cloudflare.js";
 
-/**
- * Crop the segment, trying the fast HTTP-streaming path first and falling
- * back to a full download into the LRU cache only when streaming fails (which
- * happens for non-faststart MP4s where the `moov` atom is at the end of the
- * file, since FFmpeg can't range-seek without the index).
- */
 async function cropWithFallback(
   segmentId: string,
   videoStoragePath: string,
   startSeconds: number,
   endSeconds: number,
 ): Promise<string> {
-  // Path 1: stream directly from a signed URL — no download, no disk cache.
   try {
     const signedUrl = await getSignedSourceUrl(videoStoragePath);
     return await cropSegment({
@@ -33,8 +26,6 @@ async function cropWithFallback(
     );
   }
 
-  // Path 2 (fallback): download the whole source into the LRU cache and
-  // crop from local disk. Same behavior as the original implementation.
   const inputPath = await getCachedVideo(videoStoragePath);
   return cropSegment({
     input: inputPath,
@@ -44,8 +35,36 @@ async function cropWithFallback(
   });
 }
 
+/**
+ * Cloudflare mirror — never fails the job; download is already live via Firebase.
+ */
+function mirrorToCloudflareInBackground(clipPath: string, segmentId: string): void {
+  uploadToCloudflareStream(clipPath, segmentId)
+    .then(({ uid }) =>
+      updateSegmentDoc(segmentId, {
+        clipCloudflareUid: uid,
+      }),
+    )
+    .then(() => console.log(`[segment ${segmentId}] Cloudflare mirror complete`))
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[segment ${segmentId}] Cloudflare mirror failed (clip still downloadable via Firebase): ${msg}`,
+      );
+    })
+    .finally(() => {
+      if (fs.existsSync(clipPath)) {
+        fs.unlinkSync(clipPath);
+      }
+    });
+}
+
 export async function processSegment(job: CropJobMessage): Promise<void> {
   const { segmentId, videoStoragePath, startSeconds, endSeconds } = job;
+
+  console.log(
+    `[segment ${segmentId}] processing ${videoStoragePath} [${startSeconds}s–${endSeconds}s]`,
+  );
 
   const clipPath = await cropWithFallback(
     segmentId,
@@ -54,34 +73,26 @@ export async function processSegment(job: CropJobMessage): Promise<void> {
     endSeconds,
   );
 
-  const [storageResult, cfResult] = await Promise.allSettled([
-    uploadClip(clipPath, segmentId),
-    uploadToCloudflareStream(clipPath, segmentId),
-  ]);
-
-  if (fs.existsSync(clipPath)) {
-    fs.unlinkSync(clipPath);
-  }
-
-  if (storageResult.status === "rejected") {
-    const reason = storageResult.reason instanceof Error
-      ? storageResult.reason.message
-      : JSON.stringify(storageResult.reason);
+  // Priority: Firebase Storage + signed download URL. Editor can download
+  // as soon as this completes — we do NOT wait for Cloudflare.
+  let downloadUrl: string;
+  try {
+    downloadUrl = await uploadClip(clipPath, segmentId);
+  } catch (err) {
+    if (fs.existsSync(clipPath)) fs.unlinkSync(clipPath);
+    const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`Firebase Storage upload failed: ${reason}`);
-  }
-  if (cfResult.status === "rejected") {
-    const reason = cfResult.reason instanceof Error
-      ? cfResult.reason.message
-      : JSON.stringify(cfResult.reason);
-    throw new Error(`Cloudflare Stream upload failed: ${reason}`);
   }
 
   await updateSegmentDoc(segmentId, {
     clipStoragePath: `clips/${segmentId}.mp4`,
-    clipDownloadUrl: storageResult.value,
-    clipCloudflareUid: cfResult.value.uid,
-    clipStatus: "processing",
+    clipDownloadUrl: downloadUrl,
+    clipStatus: "ready",
   });
 
-  console.log(`Segment ${segmentId} processed successfully`);
+  console.log(
+    `[segment ${segmentId}] ready for download (Firebase signed URL) — starting Cloudflare mirror`,
+  );
+
+  mirrorToCloudflareInBackground(clipPath, segmentId);
 }
