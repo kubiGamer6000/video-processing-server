@@ -9,6 +9,7 @@
     "dev": "tsx --watch src/server.ts",
     "backfill": "tsx src/scripts/backfill.ts",
     "backfill:local": "tsx src/scripts/backfill-local.ts",
+    "backfill:faststart": "tsx src/scripts/backfill-faststart.ts",
     "fix:signed-urls": "tsx src/scripts/fix-signed-urls.ts"
   },
   "keywords": [],

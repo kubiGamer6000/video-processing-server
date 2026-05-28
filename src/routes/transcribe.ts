@@ -7,19 +7,24 @@ import { getCachedVideo } from "../services/video-cache.js";
 import { extractAudio, extractFullAudio } from "../services/ffmpeg.js";
 import { transcribeAudio, transcribeAudioFull } from "../services/elevenlabs.js";
 import { getSignedSourceUrl } from "../services/firebase.js";
+import { getFaststartStoragePath, migrateToFaststart } from "../services/faststart.js";
 import { getEnv } from "../config/env.js";
 
 const router = Router();
 
 /**
- * Run an FFmpeg-based extractor first via HTTP streaming from a signed URL,
- * then — only if that fails (typically non-faststart MP4s) — fall back to
- * downloading the full source into the LRU cache.
+ * Run an FFmpeg-based extractor:
+ *   1. If the source is .mp4, stream directly from a signed Firebase URL.
+ *   2. If the source is .mov AND a faststart .mp4 sidecar already exists
+ *      (created lazily by a prior crop or transcription), stream that.
+ *   3. Otherwise download the .mov into the LRU cache, run the extractor
+ *      locally, then schedule a background faststart migration so the
+ *      NEXT request can use path 2 above.
  *
- * Skips HTTP streaming entirely for `.mov` files: iPhone-recorded .mov has
- * the moov atom at the END of the file, so ffmpeg has to scan the whole
- * thing over slow droplet HTTP to find it. The local-cache path does a
- * single large GET which is dramatically faster.
+ * iPhone-recorded .mov files have the moov atom at the END so streaming
+ * them without a faststart sidecar is pathologically slow (5+ minutes of
+ * appears-frozen behaviour). The migration step is what turns those into
+ * proper streaming videos once and for all.
  */
 async function withStreamingFallback<T>(
   videoStoragePath: string,
@@ -27,11 +32,20 @@ async function withStreamingFallback<T>(
   run: (input: string) => Promise<T>,
 ): Promise<T> {
   const ext = path.extname(videoStoragePath).toLowerCase();
-  const canStream = ext !== ".mov";
 
-  if (canStream) {
+  let streamablePath: string | null = null;
+  if (ext === ".mov") {
+    streamablePath = await getFaststartStoragePath(videoStoragePath);
+  } else {
+    streamablePath = videoStoragePath;
+  }
+
+  if (streamablePath) {
     try {
-      const signedUrl = await getSignedSourceUrl(videoStoragePath);
+      const signedUrl = await getSignedSourceUrl(streamablePath);
+      console.log(
+        `[${logTag}] streaming from ${streamablePath === videoStoragePath ? "original" : "faststart sidecar"}`,
+      );
       return await run(signedUrl);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -41,11 +55,22 @@ async function withStreamingFallback<T>(
     }
   } else {
     console.log(
-      `[${logTag}] skipping HTTP streaming for ${ext} (likely non-faststart) — using cached download path`,
+      `[${logTag}] no faststart sidecar for .mov — using cached download path ` +
+        `(will create sidecar in background)`,
     );
   }
+
   const localPath = await getCachedVideo(videoStoragePath);
-  return run(localPath);
+  const result = await run(localPath);
+
+  if (ext === ".mov" && streamablePath === null) {
+    void migrateToFaststart({
+      localMovPath: localPath,
+      originalStoragePath: videoStoragePath,
+    });
+  }
+
+  return result;
 }
 
 router.post("/transcribe", requireApiKey, async (req: Request, res: Response) => {

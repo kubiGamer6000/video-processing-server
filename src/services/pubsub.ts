@@ -1,6 +1,6 @@
 import { PubSub, type Message } from "@google-cloud/pubsub";
 import { getEnv } from "../config/env.js";
-import { processSegment } from "../worker/segment-processor.js";
+import { processSegment, SegmentDeletedError } from "../worker/segment-processor.js";
 
 let subscription: ReturnType<InstanceType<typeof PubSub>["subscription"]>;
 
@@ -11,6 +11,14 @@ export interface CropJobMessage {
   endSeconds: number;
 }
 
+/**
+ * Decide what to do with a finished message based on the error (or lack
+ * thereof). Errors fall into three buckets:
+ *   - none → ack (job done)
+ *   - SegmentDeletedError → ack (permanent failure; the doc is gone, no
+ *     amount of retrying will fix it)
+ *   - everything else → nack (transient; let Pub/Sub redeliver)
+ */
 async function handleMessage(message: Message): Promise<void> {
   let data: CropJobMessage;
   try {
@@ -28,7 +36,17 @@ async function handleMessage(message: Message): Promise<void> {
     message.ack();
     console.log(`Completed crop job: segment=${data.segmentId}`);
   } catch (err) {
-    console.error(`Failed crop job: segment=${data.segmentId}`, err);
+    if (err instanceof SegmentDeletedError) {
+      // Permanent failure: doc no longer exists. ACK to stop the
+      // redelivery loop. (Pub/Sub would otherwise keep retrying for up
+      // to 7 days.)
+      console.log(
+        `Acking deleted segment job: ${data.segmentId} (${err.message})`,
+      );
+      message.ack();
+      return;
+    }
+    console.error(`Failed crop job (will retry): segment=${data.segmentId}`, err);
     message.nack();
   }
 }
