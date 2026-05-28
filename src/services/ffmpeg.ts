@@ -57,39 +57,20 @@ export interface ExtractAudioOptions {
 
 const PADDING_SECONDS = 2;
 
-// Output quality settings.
-//
-// We re-encode (no `-c copy`) for three reasons:
-//   1. Caps the long edge at 1080p, so 4K/HEVC sources don't produce 80MB
-//      clips for a 5-second segment.
-//   2. CRF 20 + libx264 looks essentially identical to source for hand-held
-//      video, while shrinking files 5-10×.
-//   3. Re-encoding sidesteps the `-c copy` + `-ss` keyframe-alignment bug
-//      that produced clips with the wrong duration on iPhone HEVC and Sony
-//      XAVC sources.
-//
-// `veryfast` keeps wall-clock encode time below realtime on a 4-vCPU droplet
-// at 1080p — a 9-second segment encodes in ~3-6s after seek.
-const VIDEO_PRESET = "veryfast";
-const VIDEO_CRF = "20";
-const AUDIO_BITRATE = "192k";
-// Long-edge cap of 1920px (= 1080p in either orientation):
-//   landscape 3840x2160 → 1920x1080
-//   portrait  2160x3840 → 1080x1920
-// Sources already ≤1080p on the long edge are left at native size (no upscale).
-const SCALE_FILTER =
-  "scale='if(gt(iw,ih),min(1920,iw),-2)':'if(gt(iw,ih),-2,min(1920,ih))'";
-
 /**
- * Crops a segment from a video and re-encodes it to 1080p H.264 at CRF 20.
+ * Crops a segment from a video using FFmpeg stream copy (no re-encode).
+ *
+ * This is the fast path that's been running in production for ages. The
+ * dashboard server's `local-crop` pipeline now handles short segments and
+ * does the 1080p re-encode itself — re-encoding here on the droplet's
+ * 1 vCPU was bringing the worker to 0.03× realtime on 4K sources, which
+ * starved transcription requests of CPU.
  *
  * Places `-ss` before `-i` so FFmpeg seeks by byte offset (instant on
  * faststart MP4s; for HTTP inputs this means range requests to only fetch
  * the bytes for the segment + some lookahead, not the whole file).
  *
  * Adds 2s padding before and after the segment for clean cuts.
- * Output is faststart MP4 (moov at the front) so the clip is range-seekable
- * the moment it lands in Firebase Storage.
  */
 export async function cropSegment(opts: CropOptions): Promise<string> {
   const outputDir = ensureOutputDir();
@@ -106,19 +87,7 @@ export async function cropSegment(opts: CropOptions): Promise<string> {
     "-ss", formatSeconds(paddedStart),
     "-i", opts.input,
     "-t", String(duration),
-    // Drop anything that's not the first video + first audio (no Dolby Vision
-    // RPU, no timed-metadata streams, etc.) — keeps the output a clean
-    // browser-playable MP4.
-    "-map", "0:v:0",
-    "-map", "0:a:0?",
-    "-vf", SCALE_FILTER,
-    "-c:v", "libx264",
-    "-preset", VIDEO_PRESET,
-    "-crf", VIDEO_CRF,
-    "-pix_fmt", "yuv420p",
-    "-c:a", "aac",
-    "-b:a", AUDIO_BITRATE,
-    "-movflags", "+faststart",
+    "-c", "copy",
     "-y",
     outputPath,
   ];
@@ -126,13 +95,11 @@ export async function cropSegment(opts: CropOptions): Promise<string> {
   console.log(
     `FFmpeg crop: ${opts.segmentId} [${paddedStart}s–${paddedEnd}s] ` +
       `(original ${opts.startSeconds}s–${opts.endSeconds}s, ±${PADDING_SECONDS}s pad) ` +
-      `→ 1080p H.264 CRF${VIDEO_CRF} via ${usingHttp ? "stream (HTTP)" : "local"}`,
+      `via ${usingHttp ? "stream (HTTP)" : "local"}`,
   );
 
   try {
-    // Re-encoding takes longer than stream copy. Give HTTP inputs even more
-    // headroom because first-byte latency stacks on top of encode time.
-    const timeout = usingHttp ? 600_000 : 300_000;
+    const timeout = usingHttp ? 300_000 : 120_000;
     await execFileAsync("ffmpeg", args, {
       timeout,
       maxBuffer: 16 * 1024 * 1024,
