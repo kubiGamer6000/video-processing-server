@@ -23,7 +23,9 @@
  *     1 vCPU; bumping concurrency just slows everything down)
  *   - dry-run by default so you see what it'll do before committing
  */
-import "../config/env.js";
+// Load .env BEFORE anything reads process.env — otherwise getEnv() bails
+// out with "Required" errors because zod sees process.env empty.
+import "dotenv/config";
 import { getEnv } from "../config/env.js";
 import { initFirebase, getDb } from "../services/firebase.js";
 import { getCachedVideo } from "../services/video-cache.js";
