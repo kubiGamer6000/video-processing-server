@@ -77,9 +77,11 @@ export function uploadToCloudflareStream(
         }
         console.log(`Cloudflare Stream upload complete: ${segmentId} → ${uid}`);
 
-        disableSignedUrls(uid)
-          .then(() => resolve({ uid }))
-          .catch(() => resolve({ uid }));
+        // Fire-and-forget the requireSignedURLs flip — Cloudflare honours
+        // public reads almost immediately, and we don't want to add a
+        // round trip on the critical path.
+        void disableSignedUrls(uid).catch(() => {});
+        resolve({ uid });
       },
       onProgress(bytesUploaded, bytesTotal) {
         const pct = ((bytesUploaded / bytesTotal) * 100).toFixed(1);

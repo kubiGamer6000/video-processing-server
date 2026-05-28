@@ -60,9 +60,28 @@ export async function downloadVideo(storagePath: string, destPath: string): Prom
   });
 }
 
+/**
+ * Uploads a finished clip to Firebase Storage and returns a long-lived
+ * signed download URL. Optimised for "ready ASAP":
+ *   - resumable: false for clips <50MB — a single-shot HTTP PUT instead of
+ *     the two-step resumable handshake. Cuts ~200-500ms off the typical
+ *     short-clip upload.
+ *   - explicit content-type + immutable cache-control so browsers and
+ *     CDNs can keep the file forever (cropped clips never change once
+ *     uploaded; they're addressed by segmentId).
+ */
 export async function uploadClip(localPath: string, segmentId: string): Promise<string> {
   const destPath = `clips/${segmentId}.mp4`;
-  await bucket.upload(localPath, { destination: destPath });
+  const sizeBytes = fs.statSync(localPath).size;
+  const useResumable = sizeBytes > 50 * 1024 * 1024;
+  await bucket.upload(localPath, {
+    destination: destPath,
+    resumable: useResumable,
+    metadata: {
+      contentType: "video/mp4",
+      cacheControl: "public, max-age=31536000, immutable",
+    },
+  });
 
   const file = bucket.file(destPath);
   const [url] = await file.getSignedUrl({
